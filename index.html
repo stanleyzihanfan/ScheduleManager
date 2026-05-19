@@ -2550,6 +2550,20 @@ function openModal(title, bodyHTML, onConfirm) {
   document.getElementById('modal-body').innerHTML = bodyHTML;
   document.getElementById('modal-overlay').classList.add('open');
   document.getElementById('modal-confirm').onclick = onConfirm;
+
+  // Reset the footer to only the two permanent buttons (Cancel + Save).
+  // Without this, openEditTaskModal's dynamically-added Delete button
+  // gets appended again every time the modal is opened, causing duplicates.
+  const footer = document.getElementById('modal-footer');
+  footer.innerHTML = `
+    <button class="btn btn-secondary" id="modal-cancel">Cancel</button>
+    <button class="btn btn-primary"   id="modal-confirm">Save</button>
+  `;
+
+  // Re-attach the close handlers to the freshly recreated buttons.
+  // (The ones added in init() pointed to the old DOM nodes which were just replaced.)
+  document.getElementById('modal-cancel').addEventListener('click', closeModal);
+  document.getElementById('modal-confirm').onclick = onConfirm;
 }
 
 // Close the modal
@@ -2986,6 +3000,21 @@ function setupRuleRowInteractions(row) {
   }
 }
 
+// Convert a datetime-local string (e.g. "2026-05-18T14:00") to a proper UTC ISO string
+// WITHOUT any timezone shift. The datetime-local input always gives local time, but
+// `new Date("2026-05-18T14:00")` interprets it as UTC — causing a shift equal to the
+// user's timezone offset. This function constructs a Date using the local year/month/day/
+// hour/minute values directly, so the resulting ISO string reflects the correct moment.
+function localDatetimeToISO(datetimeLocalStr) {
+  // Split on "T" to get the date part and time part separately
+  const [datePart, timePart] = datetimeLocalStr.split('T');
+  const [year, month, day]   = datePart.split('-').map(Number);
+  const [hour, minute]       = timePart.split(':').map(Number);
+
+  // new Date(year, monthIndex, day, hour, minute) uses LOCAL time — no UTC shift
+  return new Date(year, month - 1, day, hour, minute).toISOString();
+}
+
 // Read all form values and return a task object (or null if invalid)
 function readTaskForm() {
   const name = document.getElementById('f-name').value.trim();
@@ -3011,8 +3040,14 @@ function readTaskForm() {
   // Scheduled block (manual)
   const startVal = document.getElementById('f-start').value;
   const endVal   = document.getElementById('f-end').value;
+
+  // IMPORTANT: datetime-local inputs give us a string like "2026-05-18T14:00".
+  // Passing that directly to `new Date()` makes the JS engine treat it as UTC,
+  // which then shifts the time by the local timezone offset when converted back
+  // via toISOString(). We use localDatetimeToISO() instead, which interprets
+  // the string as local time and produces a correct UTC ISO string.
   const scheduledBlocks = (startVal && endVal)
-    ? [{ startISO: new Date(startVal).toISOString(), endISO: new Date(endVal).toISOString() }]
+    ? [{ startISO: localDatetimeToISO(startVal), endISO: localDatetimeToISO(endVal) }]
     : [];
 
   // Recurrence rules
@@ -3041,8 +3076,8 @@ function readTaskForm() {
   return {
     name, groupId, priority, isFixed, isChunkable,
     minMinutes, expectedMinutes, maxMinutes,
-    softDeadline: softDeadline ? new Date(softDeadline).toISOString() : null,
-    hardDeadline: hardDeadline ? new Date(hardDeadline).toISOString() : null,
+    softDeadline: softDeadline ? localDatetimeToISO(softDeadline) : null,
+    hardDeadline: hardDeadline ? localDatetimeToISO(hardDeadline) : null,
     notes, scheduledBlocks,
     recurrence: { rules, mode: recurrenceMode },
   };
@@ -3648,9 +3683,10 @@ function init() {
     saveToJSONbin();
   });
 
-  // ---- Modal close button ----
+  // ---- Modal close button (the X in the header) ----
+  // Note: the Cancel and Save buttons in the footer are re-created fresh by
+  // openModal() each time, so their listeners are attached there, not here.
   document.getElementById('modal-close').addEventListener('click', closeModal);
-  document.getElementById('modal-cancel').addEventListener('click', closeModal);
 
   // Close modal when clicking the dark overlay (outside the modal box)
   document.getElementById('modal-overlay').addEventListener('click', e => {
