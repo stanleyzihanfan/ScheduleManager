@@ -693,51 +693,6 @@
             border-left-color: var(--accent) !important;
         }
 
-        /* Selection mode banner — shown at the top of the calendar when picking tasks */
-        #selection-mode-banner {
-            background: var(--accent);
-            color: #fff;
-            padding: 8px 16px;
-            font-size: 13px;
-            font-weight: 500;
-            display: none;
-            align-items: center;
-            gap: 10px;
-        }
-
-        #selection-mode-banner.show { display: flex; }
-
-        #selection-mode-banner .sel-count {
-            background: rgba(255,255,255,0.25);
-            padding: 2px 8px;
-            border-radius: 99px;
-            font-family: 'Fira Code', monospace;
-            font-size: 12px;
-        }
-
-        #selection-mode-banner button {
-            padding: 5px 12px;
-            border-radius: var(--radius-sm);
-            font-size: 12px;
-            font-weight: 600;
-        }
-
-        #selection-mode-banner .btn-run-sel {
-            background: #fff;
-            color: var(--accent);
-        }
-
-        #selection-mode-banner .btn-sel-all {
-            background: rgba(255,255,255,0.15);
-            color: #fff;
-        }
-
-        #selection-mode-banner .btn-cancel-sel {
-            background: rgba(255,255,255,0.1);
-            color: #fff;
-            margin-left: auto;
-        }
-
         /* The red "current time" line that shows right now */
         #current-time-line {
             position: absolute;
@@ -1493,13 +1448,35 @@
             <button onclick="dismissNotification()">✕</button>
         </div>
 
-        <!-- Selection mode banner: shown when user is picking tasks for auto-scheduler -->
-        <div id="selection-mode-banner">
-            <span>Click tasks to select them for auto-scheduling:</span>
-            <span class="sel-count" id="sel-count-label">0 selected</span>
-            <button class="btn-sel-all" id="btn-select-all">Select All</button>
-            <button class="btn-run-sel" id="btn-run-selection">▶ Run Scheduler</button>
-            <button class="btn-cancel-sel" id="btn-cancel-selection">✕ Cancel</button>
+        <!-- Bulk action toolbar: visible whenever one or more tasks are selected via shift-click.
+            Each button triggers an action on every task in the selectedTaskIds set. -->
+        <div id="bulk-toolbar" style="display:none; align-items:center; gap:8px; padding:8px 16px; background:var(--bg-surface); border-bottom:1px solid var(--border);">
+
+            <!-- Shows how many tasks are currently selected -->
+            <span id="bulk-count" style="font-size:13px; font-weight:600; color:var(--accent);">0 selected</span>
+
+            <!-- Clear the current selection without doing anything -->
+            <button class="btn btn-secondary" id="btn-clear-selection" style="font-size:12px; padding:4px 10px;">✕ Clear</button>
+
+            <div style="width:1px; height:20px; background:var(--border);"></div>
+
+            <!-- Run the auto-scheduler on only the selected tasks -->
+            <button class="btn btn-primary" id="btn-schedule-selected" style="font-size:12px; padding:4px 10px;">⚙ Auto-Schedule</button>
+
+            <!-- Mark all selected tasks as done -->
+            <button class="btn btn-secondary" id="btn-bulk-done" style="font-size:12px; padding:4px 10px;">✓ Mark Done</button>
+
+            <!-- Mark all selected tasks as pending (undo done) -->
+            <button class="btn btn-secondary" id="btn-bulk-pending" style="font-size:12px; padding:4px 10px;">↺ Mark Pending</button>
+
+            <!-- Change the group of all selected tasks -->
+            <select id="bulk-group-select" style="font-size:12px; padding:4px 8px; background:var(--bg-raised); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text-primary);">
+                <option value="">— Change Group —</option>
+            </select>
+
+            <!-- Delete all selected tasks -->
+            <button class="btn btn-danger" id="btn-bulk-delete" style="font-size:12px; padding:4px 10px; margin-left:auto;">🗑 Delete Selected</button>
+
         </div>
 
         <!-- The calendar renders inside this container -->
@@ -1634,11 +1611,10 @@ let appData = {
 // ============================================================
 
 // ---- TASK SELECTION STATE ----
-// Tracks which tasks are currently selected for the auto-scheduler.
+// Tracks which tasks are currently selected via shift-click.
 // We use a Set so adding/removing/checking are all O(1).
-// When selectionMode is true, clicking tasks toggles selection instead of opening the edit modal.
+// Selection is always available — just hold Shift and click any task block or sidebar row.
 let selectedTaskIds = new Set();
-let selectionMode = false; // true when the user has clicked "Auto-Schedule" and is picking tasks
 
 // Generate a short unique ID for tasks and groups
 function makeId() {
@@ -2267,15 +2243,18 @@ function placeTaskBlocksOnColumn(colElement, date) {
                 blockEl.appendChild(flag);
             }
 
-            // Click handler: if we're in selection mode, toggle the task's selection.
-            // Otherwise open the edit modal as normal.
+            // Click handler:
+            // - If Shift is held down, add/remove this task from the selection set
+            // - If Shift is NOT held, clear any existing selection and open the edit modal
             blockEl.addEventListener('click', e => {
-                e.stopPropagation(); // don't trigger the hour cell's click
+                e.stopPropagation(); // don't trigger the hour cell's click handler
 
-                if (selectionMode) {
-                    // Toggle this task in/out of the selection set
+                if (e.shiftKey) {
+                    // Shift-click: toggle this task in or out of the selection
                     toggleTaskSelection(task.id);
                 } else {
+                    // Plain click: clear the selection, then open the editor
+                    clearSelection();
                     openEditTaskModal(task.id);
                 }
             });
@@ -2661,11 +2640,14 @@ function renderSidebar() {
         row.appendChild(check);
         row.appendChild(info);
 
-        // Click the row: if in selection mode, toggle selection; otherwise open editor
-        row.addEventListener('click', () => {
-            if (selectionMode) {
+        // Click the row:
+        // - Shift held: toggle this task in or out of the selection set
+        // - No shift: clear selection and open the edit modal
+        row.addEventListener('click', e => {
+            if (e.shiftKey) {
                 toggleTaskSelection(task.id);
             } else {
+                clearSelection();
                 openEditTaskModal(task.id);
             }
         });
@@ -2704,49 +2686,21 @@ function toggleTaskDone(taskId) {
 // The scheduler then only operates on the selected tasks.
 // ============================================================
 
-// Enter selection mode: show the selection banner and change click behavior
-function enterSelectionMode() {
-    selectionMode = true;
-    selectedTaskIds.clear(); // start with nothing selected
-
-    const banner = document.getElementById('selection-mode-banner');
-    if (banner) banner.classList.add('show');
-
-    updateSelectionCount();
-    renderCalendar(); // re-render so blocks show the selection-ready cursor style
-    renderSidebar();
-}
-
-// Exit selection mode: hide banner, clear selection, restore normal click behavior
-function exitSelectionMode() {
-    selectionMode = false;
-    selectedTaskIds.clear();
-
-    const banner = document.getElementById('selection-mode-banner');
-    if (banner) banner.classList.remove('show');
-
-    renderCalendar();
-    renderSidebar();
-}
-
-// Toggle a task's membership in the selection set and update visuals
+// Toggle a task's membership in the selection set and update visuals.
+// Called when the user shift-clicks a task block or sidebar row.
 function toggleTaskSelection(taskId) {
     if (selectedTaskIds.has(taskId)) {
+        // Already selected — deselect it
         selectedTaskIds.delete(taskId);
     } else {
-        // Fixed tasks cannot be scheduled by the algorithm, so skip them
-        const task = appData.tasks.find(t => t.id === taskId);
-        if (task && task.isFixed) {
-            showNotification('Fixed events cannot be auto-scheduled.', 'warn');
-            return;
-        }
         selectedTaskIds.add(taskId);
     }
 
-    updateSelectionCount();
+    // Update the toolbar to reflect the new selection count
+    renderBulkToolbar();
 
-    // Update visual state without a full re-render (faster):
-    // toggle the 'selected' class on calendar blocks and sidebar rows
+    // Update visual state without a full re-render (faster than calling renderCalendar):
+    // just toggle CSS classes on the affected elements directly
     document.querySelectorAll('.cal-task-block').forEach(el => {
         if (el.dataset.taskId === taskId) {
             el.classList.toggle('selected', selectedTaskIds.has(taskId));
@@ -2759,25 +2713,126 @@ function toggleTaskSelection(taskId) {
     });
 }
 
-// Select ALL eligible (non-fixed, non-done) tasks at once
+// Clear the entire selection and update all visuals.
+// Called when the user clicks a task without holding Shift,
+// or clicks the "✕ Clear" button in the bulk toolbar.
+function clearSelection() {
+    selectedTaskIds.clear();
+    renderBulkToolbar();
+
+    // Remove the selected CSS class from every block and row
+    document.querySelectorAll('.cal-task-block').forEach(el => el.classList.remove('selected'));
+    document.querySelectorAll('.sidebar-task').forEach(el => el.classList.remove('selected-for-algo'));
+}
+
+// Select ALL eligible tasks at once (non-fixed, non-done).
+// Triggered by Ctrl+A or the on-screen Select All button.
 function selectAllTasks() {
     selectedTaskIds.clear();
-    appData.tasks.forEach(t => {
-        if (!t.isFixed && t.status !== 'done') {
-            selectedTaskIds.add(t.id);
+    appData.tasks.forEach(task => {
+        // Fixed events are excluded because the scheduler cannot move them anyway
+        if (!task.isFixed && task.status !== 'done') {
+            selectedTaskIds.add(task.id);
         }
     });
-    updateSelectionCount();
+    renderBulkToolbar();
+    // Full re-render needed here because we're changing many elements at once
     renderCalendar();
     renderSidebar();
 }
 
-// Update the "N selected" counter in the banner
-function updateSelectionCount() {
-    const label = document.getElementById('sel-count-label');
-    if (label) {
-        label.textContent = `${selectedTaskIds.size} selected`;
+// Show or hide the bulk action toolbar depending on how many tasks are selected.
+// Also keeps the group dropdown and task count label up to date.
+function renderBulkToolbar() {
+    const toolbar = document.getElementById('bulk-toolbar');
+    const countLabel = document.getElementById('bulk-count');
+    const groupSelect = document.getElementById('bulk-group-select');
+
+    if (!toolbar) return;
+
+    if (selectedTaskIds.size === 0) {
+        // Nothing selected — hide the toolbar entirely
+        toolbar.style.display = 'none';
+        return;
     }
+
+    // Something is selected — show the toolbar and update the count label
+    toolbar.style.display = 'flex';
+    if (countLabel) {
+        countLabel.textContent = `${selectedTaskIds.size} selected`;
+    }
+
+    // Rebuild the group dropdown to reflect the current groups list.
+    // We do this every time in case groups were added or deleted since last render.
+    if (groupSelect) {
+        // Save the placeholder option, then clear and rebuild
+        groupSelect.innerHTML = '<option value="">— Change Group —</option>';
+        appData.groups.forEach(group => {
+            const option = document.createElement('option');
+            option.value = group.id;
+            option.textContent = group.name;
+            groupSelect.appendChild(option);
+        });
+    }
+}
+
+// ---- BULK ACTION FUNCTIONS ----
+// Each one operates on every task whose ID is in selectedTaskIds.
+
+// Delete every selected task permanently
+function deleteSelectedTasks() {
+    if (selectedTaskIds.size === 0) return;
+    if (!confirm(`Delete ${selectedTaskIds.size} task(s)? This cannot be undone.`)) return;
+
+    // Keep only tasks that are NOT in the selection set
+    appData.tasks = appData.tasks.filter(task => !selectedTaskIds.has(task.id));
+
+    markUnsaved();
+    clearSelection(); // also hides the toolbar
+    renderCalendar();
+    renderSidebar();
+}
+
+// Mark every selected task as done
+function markSelectedDone() {
+    selectedTaskIds.forEach(taskId => {
+        const task = appData.tasks.find(t => t.id === taskId);
+        if (task && task.status !== 'done') {
+            task.status = 'done';
+            task.completedAt = new Date().toISOString();
+        }
+    });
+    markUnsaved();
+    renderCalendar();
+    renderSidebar();
+}
+
+// Mark every selected task as pending (useful for undoing a bulk done)
+function markSelectedPending() {
+    selectedTaskIds.forEach(taskId => {
+        const task = appData.tasks.find(t => t.id === taskId);
+        if (task) {
+            task.status = 'pending';
+            task.completedAt = null;
+        }
+    });
+    markUnsaved();
+    renderCalendar();
+    renderSidebar();
+}
+
+// Move every selected task to a different group
+function changeSelectedGroup(newGroupId) {
+    if (!newGroupId) return; // the placeholder "— Change Group —" option was chosen
+    selectedTaskIds.forEach(taskId => {
+        const task = appData.tasks.find(t => t.id === taskId);
+        if (task) {
+            task.groupId = newGroupId;
+        }
+    });
+    markUnsaved();
+    renderCalendar();
+    renderSidebar();
 }
 
 // ============================================================
@@ -3924,22 +3979,70 @@ function init() {
     // ---- Settings button ----
     document.getElementById('btn-settings').addEventListener('click', openSettingsModal);
 
-    // ---- Auto-schedule button ----
+    // ---- Auto-schedule button in the nav ----
+    // Runs the scheduler immediately on whatever is currently selected.
+    // If nothing is selected, it schedules all eligible tasks (same as before).
     document.getElementById('btn-auto-schedule').addEventListener('click', () => {
-    enterSelectionMode();
+        runAutoSchedule(selectedTaskIds);
     });
 
-    document.getElementById('btn-run-selection').addEventListener('click', () => {
-    runAutoSchedule(selectedTaskIds);
-    exitSelectionMode();
+    // ---- Bulk toolbar buttons ----
+
+    // Clear selection (the ✕ button)
+    document.getElementById('btn-clear-selection').addEventListener('click', () => {
+        clearSelection();
     });
 
-    document.getElementById('btn-cancel-selection').addEventListener('click', () => {
-    exitSelectionMode();
+    // Auto-schedule only the selected tasks
+    document.getElementById('btn-schedule-selected').addEventListener('click', () => {
+        runAutoSchedule(selectedTaskIds);
+        clearSelection();
     });
 
-    document.getElementById('btn-select-all').addEventListener('click', () => {
-    selectAllTasks();
+    // Mark all selected tasks as done
+    document.getElementById('btn-bulk-done').addEventListener('click', () => {
+        markSelectedDone();
+    });
+
+    // Mark all selected tasks as pending
+    document.getElementById('btn-bulk-pending').addEventListener('click', () => {
+        markSelectedPending();
+    });
+
+    // Change the group of all selected tasks when the dropdown changes
+    document.getElementById('bulk-group-select').addEventListener('change', e => {
+        changeSelectedGroup(e.target.value);
+        // Reset the dropdown back to the placeholder after applying the change
+        e.target.value = '';
+    });
+
+    // Delete all selected tasks
+    document.getElementById('btn-bulk-delete').addEventListener('click', () => {
+        deleteSelectedTasks();
+    });
+
+    // ---- Ctrl+A (or Cmd+A on Mac) to select all eligible tasks ----
+    // We call preventDefault() to stop the browser from selecting all text on the page.
+    document.addEventListener('keydown', e => {
+        // If the user is currently typing in a text field, textarea, or any other
+        // editable element, let the browser handle the keypress normally.
+        // e.target is the element that received the keypress.
+        const activeTag = document.activeElement.tagName;
+        const isTyping = activeTag === 'INPUT'
+                      || activeTag === 'TEXTAREA'
+                      || activeTag === 'SELECT'
+                      || document.activeElement.isContentEditable;
+
+        if (isTyping) return; // hands off — let the browser do its thing
+
+        if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+            e.preventDefault();
+            selectAllTasks();
+        }
+        // Press Escape to clear the selection
+        if (e.key === 'Escape') {
+            clearSelection();
+        }
     });
 
     // ---- Manual save button (the status pill) ----
