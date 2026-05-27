@@ -2252,7 +2252,7 @@ function placeTaskBlocksOnColumn(colElement, date) {
             blockEl.addEventListener('click', e => {
                 e.stopPropagation(); // don't trigger the hour cell's click handler
 
-                if (e.shiftKey) {
+                if (e.ctrlkey) {
                     // Prevent the browser's default shift-click behavior,
                     // which is to extend the text selection on the page
                     e.preventDefault();
@@ -2650,7 +2650,7 @@ function renderSidebar() {
         // - Shift held: toggle this task in or out of the selection set
         // - No shift: clear selection and open the edit modal
         row.addEventListener('click', e => {
-            if (e.shiftKey) {
+            if (e.ctrlkey) {
                 // Prevent the browser's default shift-click behavior,
                 // which is to extend the text selection on the page
                 e.preventDefault();
