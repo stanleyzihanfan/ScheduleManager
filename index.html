@@ -1458,6 +1458,9 @@
             <!-- Clear the current selection without doing anything -->
             <button class="btn btn-secondary" id="btn-clear-selection" style="font-size:12px; padding:4px 10px;">✕ Clear</button>
 
+            <!-- Select all eligible tasks (same as Ctrl+A) -->
+            <button class="btn btn-secondary" id="btn-select-all" style="font-size:12px; padding:4px 10px;">Select All</button>
+
             <div style="width:1px; height:20px; background:var(--border);"></div>
 
             <!-- Run the auto-scheduler on only the selected tasks -->
@@ -2250,6 +2253,9 @@ function placeTaskBlocksOnColumn(colElement, date) {
                 e.stopPropagation(); // don't trigger the hour cell's click handler
 
                 if (e.shiftKey) {
+                    // Prevent the browser's default shift-click behavior,
+                    // which is to extend the text selection on the page
+                    e.preventDefault();
                     // Shift-click: toggle this task in or out of the selection
                     toggleTaskSelection(task.id);
                 } else {
@@ -2645,6 +2651,9 @@ function renderSidebar() {
         // - No shift: clear selection and open the edit modal
         row.addEventListener('click', e => {
             if (e.shiftKey) {
+                // Prevent the browser's default shift-click behavior,
+                // which is to extend the text selection on the page
+                e.preventDefault();
                 toggleTaskSelection(task.id);
             } else {
                 clearSelection();
@@ -2739,6 +2748,10 @@ function selectAllTasks() {
     // Full re-render needed here because we're changing many elements at once
     renderCalendar();
     renderSidebar();
+    // After re-rendering, return focus to the body so the keydown listener
+    // keeps receiving Ctrl+A and Escape correctly. Without this, focus can
+    // drift to a newly created DOM element and the shortcut stops working.
+    document.body.focus();
 }
 
 // Show or hide the bulk action toolbar depending on how many tasks are selected.
@@ -4043,6 +4056,10 @@ function init() {
         if (e.key === 'Escape') {
             clearSelection();
         }
+    });
+    //Select all btn
+    document.getElementById('btn-select-all').addEventListener('click', () => {
+        selectAllTasks();
     });
 
     // ---- Manual save button (the status pill) ----
